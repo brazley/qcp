@@ -22,14 +22,12 @@ QCP provides a built-in tool library system that allows easy integration of pre-
 ```swift
 // Configure the toolkit with default tools
 await QCPToolKit.configureDefaultTools(
-    fileService: .shared,
-    networkService: networkService
+    fileService: .shared
 )
 
 // Or register specific tool providers
 let toolKit = QCPToolKit.shared
 await toolKit.register(QCPFileSystemTools())
-await toolKit.register(QCPNetworkTools(networkService: networkService))
 ```
 
 Available Tool Categories:
@@ -66,32 +64,12 @@ public protocol QCPToolProvider: Sendable {
 }
 ```
 
-#### Tool Property Structure
-```swift
-public struct QCPToolProperty: Codable, Sendable, Hashable {
-    public let type: String
-    public let description: String
-    public let required: Bool
-    public let enumValues: [String]?
-}
-```
-
-#### Tool Result Structure
-```swift
-public struct QCPToolResult: Codable, Sendable, Hashable {
-    public let success: Bool
-    public let content: String
-    public let isError: Bool
-    public let metadata: [String: String]?
-    public let state: QCPAPIState
-}
-```
-
 ### Data Models
 
-#### QCPAPIMessage
+All message types conform to Sendable for actor isolation safety:
+
 ```swift
-public struct QCPAPIMessage: Codable, Sendable {
+public struct QCPAPIMessage: Identifiable, Codable, Sendable {
     public let id: UUID
     public let content: String
     public let agentId: String
@@ -102,163 +80,34 @@ public struct QCPAPIMessage: Codable, Sendable {
 }
 ```
 
-#### QCPMessageRole
-```swift
-public enum QCPMessageRole: String, Codable, Sendable {
-    case user
-    case assistant
-    case agent
-    case system
-}
-```
+### Network Architecture
 
-#### QCPAPIState
-```swift
-public enum QCPAPIState: String, Codable, Sendable {
-    case processing    // Operation in progress
-    case success      // Operation completed successfully
-    case error        // Operation failed
-    case unknown      // Initial state
-}
-```
-
-### File System Operations
-
-The framework provides comprehensive file system operations through QCPFileSystemService:
+The framework uses a serverless architecture for AI agent communication:
 
 ```swift
-// Initialize with project directory
-let projectPath = "/Users/username/Projects/MyApp"
-try await QCPFileSystemService.shared.initialize(watchedPath: projectPath)
-
-// CRUD Operations
-try await fileSystem.createFile(at: "path/file.swift", content: content)
-let content = try await fileSystem.readFile(at: "path/file.swift")
-try await fileSystem.updateFile(at: "path/file.swift", content: updatedContent)
-try await fileSystem.deleteFile(at: "path/file.swift")
-
-// Directory Operations
-try await fileSystem.createDirectory(at: "path/newFolder")
-let files = try await fileSystem.listDirectory(at: "path")
-try await fileSystem.deleteDirectory(at: "path/folder")
-
-// File Watching
-try await fileSystem.watchFile(at: "path/file.swift") { event in
-    switch event {
-    case .modified(let url):
-        // Handle modification
-    case .deleted(let url):
-        // Handle deletion
-    }
-}
-```
-
-### Persistence Layer
-- Uses SwiftData for data storage
-- Automatically handles model schema
-- Manages chat and message persistence
-- Provides CRUD operations for all data types
-
-## System Integration Instructions
-
-### Required Initial Setup
-```swift
-// 1. Network Configuration
-let config = QCPNetworkConfig(
-    baseURL: URL(string: "api-endpoint")!,
-    defaultHeaders: ["Content-Type": "application/json"]
-)
-let networkService = QCPNetworkService(config: config)
-
-// 2. Message Queue Initialization
-let messageQueue = QCPMessageQueue()
-
-// 3. Storage Access
-let storage = QCPStorageManager.shared
-
-// 4. Tool Library Setup
-await QCPToolKit.configureDefaultTools(
-    fileService: .shared,
-    networkService: networkService
-)
-```
-
-### Custom Tool Integration
-1. Create a tool provider:
-```swift
-public actor CustomToolProvider: QCPToolProvider {
-    public var tools: [QCPTool] {
-        [CustomTool()]
-    }
+@globalActor actor BuildshipService {
+    static let shared = BuildshipService()
     
-    public func register(with manager: QCPToolManager) async {
-        for tool in tools {
-            await manager.register(tool)
-        }
-    }
-}
-```
-
-2. Implement custom tool:
-```swift
-struct CustomTool: QCPTool {
-    let name = "custom.tool"
-    let description = "Custom tool description"
-    let inputSchema: [String: QCPToolProperty] = [
-        "parameter": .init(
-            type: "string",
-            description: "Parameter description",
-            required: true
-        )
-    ]
+    private let baseURL: URL       // Serverless endpoint
+    private let qcpService: QCPBuildshipService
     
-    func execute(with input: [String: String]) async throws -> QCPToolResult {
-        // Tool logic here
-        return QCPToolResult(
-            success: true,
-            content: "Result",
-            state: .success
-        )
-    }
+    func sendMessage(
+        _ content: String,
+        threadId: UUID,
+        tools: [QCPTool] = []
+    ) async throws -> SendableAgentMessage
 }
 ```
 
-3. Register with toolkit:
-```swift
-await QCPToolKit.shared.register(CustomToolProvider())
-```
+Key characteristics:
+- No persistent connections required
+- Endpoints spin up on demand
+- Built-in request error handling
+- Actor isolation for thread safety
 
-### Message Processing Protocol
-1. Create message:
-```swift
-let message = QCPAPIMessage(
-    content: "message_content",
-    agentId: "agent_identifier",
-    role: .agent
-)
-```
+### Error Handling System
 
-2. Process message:
-```swift
-messageQueue.enqueue(message)
-```
-
-3. Handle tool usage:
-```swift
-// Tool usage in message content format:
-/*
-{
-    "tool": "tool.name",
-    "input": {
-        "parameterName": "value"
-    }
-}
-*/
-```
-
-## Error Handling System
-
-### Network Errors (QCPNetworkError)
+#### Network Errors (QCPNetworkError)
 - noConnection
 - invalidResponse
 - httpError(statusCode: Int, data: Data?)
@@ -268,7 +117,7 @@ messageQueue.enqueue(message)
 - noData
 - serviceDeinitialized
 
-### Tool Errors (QCPToolError)
+#### Tool Errors (QCPToolError)
 - toolNotFound(String)
 - invalidInput(String)
 - executionFailed(String)
@@ -289,7 +138,7 @@ messageQueue.enqueue(message)
 - SwiftData (automatically included with iOS 17/macOS 14)
 
 ## Security Considerations
-- All network communication should use HTTPS
+- All network communication uses HTTPS
 - Tool validation prevents injection attacks
 - Input sanitization enforced through schema
 - Actor isolation prevents race conditions
@@ -303,7 +152,7 @@ messageQueue.enqueue(message)
 6. Monitor state changes for error handling
 7. Use proper error types for different scenarios
 8. Register tools through QCPToolKit for better organization
-9. Respect network retry policies
+9. Remember serverless endpoints don't need availability checks
 10. Follow provided tool patterns for consistency
 
 ## License
